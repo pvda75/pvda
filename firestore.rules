@@ -1,0 +1,108 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        ('email' in request.auth.token && request.auth.token.email != null && (
+          request.auth.token.email == "pvda.mcb@gmail.com" ||
+          request.auth.token.email.lower() == "pvda.mcb@gmail.com"
+        )) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isApprovedTeacher() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        ('email' in request.auth.token && request.auth.token.email != null && (
+          request.auth.token.email == "pvda.mcb@gmail.com" ||
+          request.auth.token.email.lower() == "pvda.mcb@gmail.com"
+        )) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'teacher'])
+      );
+    }
+
+    function isSessionOwner(sessionId) {
+      return isAuthenticated() && (
+        isAdmin() ||
+        isApprovedTeacher() ||
+        (exists(/databases/$(database)/documents/sessions/$(sessionId)) && (
+          !('teacherId' in get(/databases/$(database)/documents/sessions/$(sessionId)).data) ||
+          get(/databases/$(database)/documents/sessions/$(sessionId)).data.teacherId == request.auth.uid
+        ))
+      );
+    }
+
+    function isResourceOwner() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        !('teacherId' in resource.data) ||
+        resource.data.teacherId == request.auth.uid
+      );
+    }
+
+    function isRequestOwner() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        !('teacherId' in request.resource.data) ||
+        request.resource.data.teacherId == request.auth.uid
+      );
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /sessions/{sessionId} {
+      // Anyone with the link can read the session to start the test
+      allow read: if true;
+      
+      // Approved teachers, admins, or session creator can create sessions
+      allow create: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isRequestOwner());
+      
+      // The session owner, approved teacher or admin can update or delete the session
+      allow update: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isResourceOwner());
+      allow delete: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isResourceOwner());
+
+      match /versions/{versionId} {
+        // Anyone with the link can read the versions to take the test
+        allow read: if true;
+        
+        // Session owner, approved teacher or admin can manage versions
+        allow create, update, delete: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isSessionOwner(sessionId));
+      }
+
+      match /participants/{participantId} {
+        allow read: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isSessionOwner(sessionId));
+        allow create, update: if true;
+        allow delete: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isSessionOwner(sessionId));
+      }
+
+      match /results/{resultId} {
+        // Only the session owner, teacher or admin can view the results
+        allow read: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isSessionOwner(sessionId));
+        
+        // Anyone can submit a result (students are not authenticated)
+        allow create: if true;
+        
+        // Results can be modified by admin, session owner or approved teacher
+        allow update: if isAuthenticated() && (isAdmin() || isApprovedTeacher() || isSessionOwner(sessionId));
+        
+        // Only the teacher or admin can delete results
+        allow delete: if isAuthenticated() && (isApprovedTeacher() || isAdmin() || isSessionOwner(sessionId));
+      }
+    }
+  }
+}

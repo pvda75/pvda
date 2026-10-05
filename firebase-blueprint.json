@@ -1,0 +1,150 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A teacher or admin user",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "teacher", "pending"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "A test session created by a teacher",
+      "type": "object",
+      "properties": {
+        "teacherId": {
+          "type": "string",
+          "description": "The UID of the teacher who created the session"
+        },
+        "config": {
+          "type": "object",
+          "description": "Configuration for the test (number of questions, duration)",
+          "properties": {
+            "mc": { "type": "number" },
+            "tf": { "type": "number" },
+            "sa": { "type": "number" },
+            "fr": { "type": "number" },
+            "duration": { "type": "number" }
+          },
+          "required": ["mc", "tf", "sa", "fr", "duration"]
+        },
+        "teacherPassword": {
+          "type": "string",
+          "description": "Optional password to manage the session"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the session was created"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "closed"],
+          "description": "Whether the session is currently accepting submissions"
+        }
+      },
+      "required": ["teacherId", "config", "createdAt", "status"]
+    },
+    "TestVersion": {
+      "title": "TestVersion",
+      "description": "A specific version of a test within a session",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The version code (e.g., '101')"
+        },
+        "testFileDataUrl": {
+          "type": "string",
+          "description": "Base64 encoded PDF file for the test"
+        },
+        "testFileName": {
+          "type": "string",
+          "description": "Original filename of the test PDF"
+        },
+        "answerKeyFileDataUrl": {
+          "type": "string",
+          "description": "Base64 encoded Excel file for the answer key"
+        },
+        "answerKeyFileName": {
+          "type": "string",
+          "description": "Original filename of the answer key"
+        },
+        "correctAnswers": {
+          "type": "object",
+          "description": "Parsed correct answers map"
+        }
+      },
+      "required": ["id", "testFileDataUrl", "testFileName", "answerKeyFileDataUrl", "answerKeyFileName", "correctAnswers"]
+    },
+    "StudentResult": {
+      "title": "StudentResult",
+      "description": "A student's submitted test result",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "The ID of the session this result belongs to"
+        },
+        "studentName": {
+          "type": "string",
+          "description": "The student's name"
+        },
+        "studentClass": {
+          "type": "string",
+          "description": "The student's class"
+        },
+        "testVersionId": {
+          "type": "string",
+          "description": "The version code the student took"
+        },
+        "answers": {
+          "type": "object",
+          "description": "The student's answers"
+        },
+        "submissionTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the test was submitted"
+        },
+        "submissionType": {
+          "type": "string",
+          "enum": ["manual", "auto"],
+          "description": "How the test was submitted"
+        },
+        "score": {
+          "type": "number",
+          "description": "The auto-graded score"
+        }
+      },
+      "required": ["sessionId", "studentName", "studentClass", "testVersionId", "answers", "submissionTime", "submissionType", "score"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores teacher and admin accounts"
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/Session" },
+      "description": "Stores test sessions created by teachers"
+    },
+    "/sessions/{sessionId}/versions/{versionId}": {
+      "schema": { "$ref": "#/entities/TestVersion" },
+      "description": "Stores the test versions (PDFs and answers) for a session"
+    },
+    "/sessions/{sessionId}/results/{resultId}": {
+      "schema": { "$ref": "#/entities/StudentResult" },
+      "description": "Stores all student submissions for a session"
+    }
+  }
+}

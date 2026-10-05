@@ -1,0 +1,5 @@
+{
+  "name": "HỆ THỐNG KIỂM TRA TRỰC TUYẾN",
+  "description": "Ứng dụng cho phép học sinh làm bài thi bằng cách xem đề bài dạng PDF và điền vào một phiếu trả lời kỹ thuật số. Ứng dụng cũng có tính năng chấm điểm bài làm dựa trên đáp án được cung cấp.",
+  "requestFramePermissions": []
+}
