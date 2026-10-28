@@ -1,5 +1,5 @@
 
-import { Answers, ScoreConfig } from './types';
+import { Answers, ScoreConfig, StudentResult, EssayGradingItem } from './types';
 
 /**
  * Parses an answer key from an Excel file.
@@ -180,6 +180,41 @@ export const calculateScore = (
     }
 
     return mcScore + tfScore + saScore;
+};
+
+/**
+ * Tính tổng điểm đầy đủ bao gồm cả điểm trắc nghiệm tự động và điểm tự luận (AI hoặc GV chấm).
+ */
+export const calculateTotalScoreWithEssay = (
+    result: StudentResult,
+    correctAnswers: Answers,
+    numMultipleChoice: number,
+    numTrueFalse: number,
+    numShortAnswer: number = 0,
+    numFreeResponse: number = 0,
+    scoreConfig?: ScoreConfig
+): { autoScore: number; essayScore: number; totalScore: number; maxScore: number } => {
+    const autoScore = calculateScore(result.answers, correctAnswers, numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
+    const maxScore = calculateMaxScore(numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
+
+    let essayScore = 0;
+    if (result.essayTotalScore !== undefined) {
+      essayScore = result.essayTotalScore;
+    } else if (result.essayGrading) {
+      essayScore = Object.values(result.essayGrading).reduce((acc: number, curr: EssayGradingItem) => acc + (curr.score || 0), 0);
+    }
+
+    let finalTotal = autoScore + essayScore;
+    if (scoreConfig && scoreConfig.totalScore && finalTotal > scoreConfig.totalScore) {
+      finalTotal = scoreConfig.totalScore;
+    }
+
+    return {
+      autoScore: Number(autoScore.toFixed(2)),
+      essayScore: Number(essayScore.toFixed(2)),
+      totalScore: Number(finalTotal.toFixed(2)),
+      maxScore: Number(maxScore.toFixed(1))
+    };
 };
 
 /**

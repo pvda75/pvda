@@ -20,21 +20,47 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, onBackToRoleS
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [popupBlocked, setPopupBlocked] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
 
+  // Check if running inside an iframe (like AI Studio preview)
+  const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+  const handleOpenInNewTab = () => {
+    window.open(window.location.href, '_blank');
+  };
+
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     setError('');
+    setPopupBlocked(false);
     try {
       const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, provider);
       // App.tsx will handle the state change via onAuthStateChanged
     } catch (err: any) {
       console.error('Login error:', err);
-      setError('Đăng nhập Google thất bại. Vui lòng thử lại.');
       setIsLoading(false);
+      const isPopupBlocked =
+        err.code === 'auth/popup-blocked' ||
+        err.message?.includes('popup-blocked') ||
+        err.message?.includes('popup has been blocked');
+
+      if (isPopupBlocked) {
+        setPopupBlocked(true);
+        setError('Trình duyệt hoặc khung xem thử đã chặn cửa sổ đăng nhập Google (Pop-up blocked).');
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        setError('Cửa sổ đăng nhập đã bị đóng trước khi hoàn tất.');
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        setError('Yêu cầu đăng nhập đã bị hủy.');
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError('Tên miền chưa được cấp phép trong Firebase Auth Console.');
+      } else {
+        setError(`Đăng nhập Google thất bại: ${err.message || 'Vui lòng thử lại.'}`);
+      }
     }
   };
 
@@ -111,6 +137,54 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, onBackToRoleS
             Tiếp tục với Google
           </button>
 
+          {/* Popup Blocked Guidance Banner */}
+          {popupBlocked && (
+            <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-left text-sm text-amber-900 space-y-3 animate-fadeIn">
+              <div className="flex items-start gap-2">
+                <span className="text-xl">⚠️</span>
+                <div>
+                  <p className="font-bold text-amber-950">Trình duyệt đã chặn cửa sổ đăng nhập</p>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    Khung xem thử (iFrame) hoặc trình duyệt đã chặn cửa sổ Google popup. Bạn hãy chọn 1 trong các cách sau:
+                  </p>
+                </div>
+              </div>
+              
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleOpenInNewTab}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  Cách 1: Mở ở tab mới để đăng nhập Google
+                </button>
+                <div className="text-xs text-amber-900 bg-white/80 p-2.5 rounded-lg border border-amber-200 leading-relaxed">
+                  📌 <strong>Cách 2:</strong> Nhìn vào góc phải thanh địa chỉ (URL bar), nhấp vào biểu tượng <strong>"Pop-up blocked / Cửa sổ bị chặn"</strong> và chọn <em>"Luôn cho phép"</em>.
+                </div>
+                <div className="text-xs text-amber-900 bg-white/80 p-2.5 rounded-lg border border-amber-200 leading-relaxed">
+                  🔑 <strong>Cách 3:</strong> Đăng nhập hoặc Đăng ký bằng <strong>Email & Mật khẩu</strong> ngay bên dưới (không cần mở cửa sổ popup).
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* If in iframe and not yet blocked, show a subtle hint */}
+          {isInIframe && !popupBlocked && (
+            <button
+              type="button"
+              onClick={handleOpenInNewTab}
+              className="text-xs text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 mx-auto underline"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              Mở ứng dụng ở tab riêng (nếu gặp lỗi chặn popup)
+            </button>
+          )}
+
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-gray-300"></div>
@@ -162,7 +236,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, onBackToRoleS
               />
             </div>
 
-            {error && <p className="text-center text-sm text-red-600">{error}</p>}
+            {error && !popupBlocked && <p className="text-center text-sm text-red-600">{error}</p>}
 
             <button
               type="submit"

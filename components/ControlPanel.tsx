@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { UploadIcon, ChevronLeftIcon, CheckCircleIcon } from './icons';
 import { AppState, ScoreConfig, Answers } from '../types';
-import { GoogleGenAI } from '@google/genai';
 import { parseAnswerKey, normalizeQuestionKey, sanitizeSessionCode } from '../utils';
 import * as docx from 'docx';
 import * as XLSX from 'xlsx';
@@ -167,14 +166,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       return;
     }
 
-    const envKey1 = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-    const envKey2 = (process as any).env?.GEMINI_API_KEY;
-    const apiKey = envKey1 || envKey2;
-    if (!apiKey) {
-      setGenerationError("Vui lòng cấu hình VITE_GEMINI_API_KEY trong hệ thống (Settings -> Secrets).");
-      return;
-    }
-
     setIsGenerating(true);
     setGenerationError("");
     setGenerationProgressMsg("Đang chuẩn bị dữ liệu...");
@@ -192,7 +183,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     };
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
       const baseVersion = versions[0];
       
       let baseText = "";
@@ -245,17 +235,22 @@ Trả về CHỈ một chuỗi JSON hợp lệ với đúng cấu trúc sau, KH�
   }
 }`;
 
-          const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: prompt,
-            config: {
-              temperature: 0.7,
-            }
+          const response = await fetch('/api/gemini/generate-test', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ prompt }),
           });
 
-          if (!response.text) throw new Error("AI không trả về kết quả.");
-          
-          let responseText = response.text;
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || `Lỗi máy chủ (${response.status}) khi tạo đề.`);
+          }
+
+          const resData = await response.json();
+          let responseText = resData.text || '';
+          if (!responseText) throw new Error("AI không trả về kết quả.");
           
           let parsedData = null;
           try {

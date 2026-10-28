@@ -43,6 +43,12 @@ export interface ScoreConfig {
   allowMultipleAttempts?: boolean; // Allow students to take the test multiple times
 }
 
+export interface EssayGradingItem {
+  score: number;
+  maxScore: number;
+  feedback: string;
+}
+
 export interface StudentResult {
   id?: string;
   sessionId?: string;
@@ -56,6 +62,8 @@ export interface StudentResult {
   submissionType?: 'manual' | 'auto_visibility' | 'auto_timeout' | 'auto_violation' | 'auto_esc';
   score?: number;
   violationCount?: number;
+  essayGrading?: Record<string, EssayGradingItem>;
+  essayTotalScore?: number;
 }
 
 export interface User {

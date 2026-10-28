@@ -1,8 +1,9 @@
 
 import React from 'react';
-import { Answers } from '../types';
+import { Answers, EssayGradingItem } from '../types';
 import { CheckCircleIcon, XCircleIcon } from './icons';
 import { normalizeAnswer, normalizeQuestionKey } from '../utils';
+import { Sparkles } from 'lucide-react';
 
 interface AnswerSheetProps {
   title: string;
@@ -20,6 +21,7 @@ interface AnswerSheetProps {
   onPrevious?: () => void;
   isFirstSection?: boolean;
   isLastSection?: boolean;
+  essayGrading?: Record<string, EssayGradingItem>;
 }
 
 const AnswerSheet: React.FC<AnswerSheetProps> = ({ 
@@ -38,6 +40,7 @@ const AnswerSheet: React.FC<AnswerSheetProps> = ({
   onPrevious,
   isFirstSection = false,
   isLastSection = false,
+  essayGrading,
 }) => {
   const mcOptions = ['A', 'B', 'C', 'D'];
   const tfOptions = ['Đúng', 'Sai'];
@@ -223,17 +226,36 @@ const AnswerSheet: React.FC<AnswerSheetProps> = ({
             <div className="space-y-4">
               {Array.from({ length: numFreeResponse }, (_, i) => i + 1).map((qNum) => {
                 const qKey = `fr-${qNum}`;
+                const gradeItem = essayGrading?.[qKey];
+
                 return (
-                  <div key={qKey} className="p-3 rounded-md bg-gray-50 border border-gray-200">
-                    <span className="font-semibold text-gray-800">Câu {qNum}</span>
+                  <div key={qKey} className="p-3.5 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-gray-800">Câu {qNum}</span>
+                      {isReview && gradeItem && (
+                        <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-800 text-xs font-bold border border-purple-200">
+                          <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                          <span>Điểm AI: {gradeItem.score} / {gradeItem.maxScore} đ</span>
+                        </div>
+                      )}
+                    </div>
                      <textarea
                           name={`question-${title}-${qKey}`}
                           value={answers[qKey] || ''}
                           onChange={(e) => onAnswerChange && onAnswerChange(qKey, e.target.value)}
                           disabled={disabled || isReview}
-                          className="mt-2 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm disabled:bg-gray-100"
+                          className="block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm disabled:bg-gray-100"
                           rows={4}
+                          placeholder={isReview ? "Học sinh không làm câu này." : "Nhập câu trả lời tự luận tại đây..."}
                       />
+                    {isReview && gradeItem?.feedback && (
+                      <div className="p-2.5 rounded-lg bg-purple-50 border border-purple-200 text-xs text-purple-900 space-y-1">
+                        <div className="font-semibold flex items-center gap-1 text-purple-700">
+                          <Sparkles className="w-3 h-3" /> Nhận xét của AI:
+                        </div>
+                        <p className="italic text-gray-700">{gradeItem.feedback}</p>
+                      </div>
+                    )}
                   </div>
                 )
               })}

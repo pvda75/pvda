@@ -8,6 +8,7 @@ import AllResultsView from "./components/ResultsView";
 import {
   calculateScore,
   calculateMaxScore,
+  calculateTotalScoreWithEssay,
   normalizeAnswer,
   normalizeQuestionKey,
   parseAnswerKey,
@@ -1843,6 +1844,33 @@ const App: React.FC = () => {
     }
   }, [sessionId]);
 
+  const handleUpdateAllStudentResults = useCallback(
+    async (updatedResults: StudentResult[]) => {
+      setAllStudentResults(updatedResults);
+      if (sessionId) {
+        try {
+          const batchPromises = updatedResults.map(async (st) => {
+            const studentDocId = st.id || st.studentId || st.name.replace(/[^a-zA-Z0-9]/g, '_');
+            const resultRef = doc(db, "sessions", sessionId, "results", studentDocId);
+            const dataToUpdate: any = {
+              essayGrading: st.essayGrading || {},
+              essayTotalScore: st.essayTotalScore ?? 0,
+            };
+            if (st.score !== undefined) {
+              dataToUpdate.score = st.score;
+            }
+            await setDoc(resultRef, dataToUpdate, { merge: true });
+          });
+          await Promise.all(batchPromises);
+        } catch (error) {
+          console.error("Error saving essay grading to Firestore:", error);
+          handleFirestoreError(error, OperationType.UPDATE, `sessions/${sessionId}/results`);
+        }
+      }
+    },
+    [sessionId],
+  );
+
   const handleResetToSetupKeepFiles = useCallback(() => {
     setCurrentStudent(null);
     setLastStudentResult(null);
@@ -2044,6 +2072,10 @@ const App: React.FC = () => {
       scoreConfig
     );
 
+    const totalMaxPossibleScore = scoreConfig?.totalScore 
+      ? scoreConfig.totalScore 
+      : autoGradedMaxScore + (numFreeResponse * (scoreConfig?.frPoints || 1));
+
     const summaryHeaders = [
       "STT",
       "Số báo danh/Mã học sinh",
@@ -2052,7 +2084,14 @@ const App: React.FC = () => {
       ...additionalStudentFields,
       "Mã đề",
       "Thời gian nộp",
-      `Điểm chấm tự động (/${autoGradedMaxScore.toFixed(1)})`,
+      ...(numFreeResponse > 0
+        ? [
+            `Điểm trắc nghiệm (/${autoGradedMaxScore.toFixed(1)})`,
+            `Điểm tự luận`,
+            `Tổng điểm (/${totalMaxPossibleScore.toFixed(1)})`,
+            "Trạng thái tự luận",
+          ]
+        : [`Điểm thi (/${autoGradedMaxScore.toFixed(1)})`]),
       "Vi phạm",
       "Ghi chú",
     ];
@@ -2063,8 +2102,9 @@ const App: React.FC = () => {
         result.testVersionId,
       )?.correctAnswers;
       if (!correctAnswers) return;
-      const score = calculateScore(
-        result.answers,
+
+      const scoreObj = calculateTotalScoreWithEssay(
+        result,
         correctAnswers,
         numMultipleChoice,
         numTrueFalse,
@@ -2072,12 +2112,20 @@ const App: React.FC = () => {
         numFreeResponse,
         scoreConfig
       );
+
+      const hasEssayGrading = !!(result.essayGrading && Object.keys(result.essayGrading).length > 0) || result.essayTotalScore !== undefined;
+
+      let essayStatus = "Không có tự luận";
+      if (numFreeResponse > 0) {
+        essayStatus = hasEssayGrading ? "Đã có điểm" : "Chưa chấm điểm";
+      }
       
       let note = "";
       if (result.submissionType === 'auto_violation') note = "Tự nộp (Vi phạm)";
       else if (result.submissionType === 'auto_visibility') note = "Tự nộp (Thoát màn hình)";
       else if (result.submissionType === 'auto_timeout') note = "Tự nộp (Hết giờ)";
-      else if (numFreeResponse > 0) note = "Chưa tính điểm tự luận";
+      else if (numFreeResponse > 0 && !hasEssayGrading) note = "Chờ chấm tự luận";
+      else if (numFreeResponse > 0 && hasEssayGrading) note = "Đã có điểm tự luận";
 
       const submissionTime = result.submissionTime
         ? new Date(result.submissionTime).toLocaleString("vi-VN", {
@@ -2098,7 +2146,14 @@ const App: React.FC = () => {
         ...additionalStudentFields.map(field => (result.additionalData && result.additionalData[field]) || ""),
         result.testVersionId,
         submissionTime,
-        score.toFixed(2),
+        ...(numFreeResponse > 0
+          ? [
+              scoreObj.autoScore.toFixed(2),
+              hasEssayGrading ? scoreObj.essayScore.toFixed(2) : "Chưa chấm",
+              scoreObj.totalScore.toFixed(2),
+              essayStatus,
+            ]
+          : [scoreObj.autoScore.toFixed(2)]),
         String(result.violationCount || 0),
         note,
       ];
@@ -2106,13 +2161,18 @@ const App: React.FC = () => {
     });
     const summaryWorksheet = window.XLSX.utils.aoa_to_sheet(summaryData);
     summaryWorksheet["!cols"] = [
-      { wch: 5 },
-      { wch: 30 },
-      { wch: 15 },
-      { wch: 10 },
+      { wch: 6 },
       { wch: 25 },
-      { wch: 30 },
-      { wch: 35 },
+      { wch: 25 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 20 },
+      { wch: 12 },
+      { wch: 25 },
     ];
     window.XLSX.utils.book_append_sheet(
       workbook,
@@ -2120,6 +2180,7 @@ const App: React.FC = () => {
       "Tổng kết kết quả",
     );
 
+    // Sheet 2: Chi tiết câu hỏi
     const listData: (string | number)[][] = [
       [
         "Tên bài kiểm tra",
@@ -2153,9 +2214,13 @@ const App: React.FC = () => {
         let resultText = "";
 
         if (key.startsWith("fr-")) {
-          resultText = "(Giáo viên chấm)";
+          const essayItem = result.essayGrading?.[key];
+          if (essayItem) {
+            resultText = `${essayItem.score}/${essayItem.maxScore} đ${essayItem.feedback ? ` - ${essayItem.feedback}` : ''}`;
+          } else {
+            resultText = "(Chưa chấm)";
+          }
         } else if (correctAnswer !== undefined) {
-          // Logic check đúng sai
           if (key.startsWith("sa-")) {
             resultText =
               studentAnswer &&
@@ -2189,19 +2254,80 @@ const App: React.FC = () => {
     const listWorksheet = window.XLSX.utils.aoa_to_sheet(listData);
     listWorksheet["!cols"] = [
       { wch: 20 },
-      { wch: 30 },
-      { wch: 15 },
+      { wch: 25 },
+      { wch: 12 },
       { wch: 10 },
-      { wch: 15 },
-      { wch: 25 },
-      { wch: 25 },
-      { wch: 15 },
+      { wch: 12 },
+      { wch: 30 },
+      { wch: 20 },
+      { wch: 30 },
     ];
     window.XLSX.utils.book_append_sheet(
       workbook,
       listWorksheet,
       "Chấm điểm chi tiết",
     );
+
+    // Sheet 3: Chi tiết Tự luận (nếu có câu tự luận)
+    if (numFreeResponse > 0) {
+      const essayHeaders = [
+        "STT",
+        "Số báo danh/Mã HS",
+        "Họ và tên",
+        "Lớp",
+        "Mã đề",
+        "Mã câu tự luận",
+        "Nội dung bài làm của học sinh",
+        "Điểm chấm",
+        "Điểm tối đa",
+        "Nhận xét / Đánh giá (AI hoặc GV)",
+        "Trạng thái",
+      ];
+      const essayData: (string | number)[][] = [essayHeaders];
+      let essayCounter = 1;
+
+      allStudentResults.forEach((result) => {
+        for (let i = 1; i <= numFreeResponse; i++) {
+          const key = `fr-${i}`;
+          const essayItem = result.essayGrading?.[key];
+          const studentAns = result.answers[key] || "";
+          
+          essayData.push([
+            String(essayCounter++),
+            result.studentId || "",
+            result.name,
+            result.class,
+            result.testVersionId,
+            `Câu ${i} (${key})`,
+            studentAns || "(Học sinh để trống)",
+            essayItem !== undefined ? Number(essayItem.score).toFixed(2) : "Chưa chấm",
+            essayItem ? String(essayItem.maxScore) : String(scoreConfig?.frPoints || 1),
+            essayItem?.feedback || "",
+            essayItem !== undefined ? "Đã chấm" : "Chưa chấm",
+          ]);
+        }
+      });
+
+      const essayWorksheet = window.XLSX.utils.aoa_to_sheet(essayData);
+      essayWorksheet["!cols"] = [
+        { wch: 6 },
+        { wch: 20 },
+        { wch: 25 },
+        { wch: 12 },
+        { wch: 10 },
+        { wch: 16 },
+        { wch: 45 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 45 },
+        { wch: 15 },
+      ];
+      window.XLSX.utils.book_append_sheet(
+        workbook,
+        essayWorksheet,
+        "Chi tiết Tự luận",
+      );
+    }
 
     const filename = testName ? `tong_ket_${testName.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.xlsx` : "tong_ket_ket_qua_lop.xlsx";
     window.XLSX.writeFile(workbook, filename);
@@ -2212,6 +2338,8 @@ const App: React.FC = () => {
     numTrueFalse,
     numShortAnswer,
     numFreeResponse,
+    scoreConfig,
+    additionalStudentFields,
     testName,
   ]);
 
@@ -2232,8 +2360,8 @@ const App: React.FC = () => {
         return;
       }
 
-      const score = calculateScore(
-        result.answers,
+      const scoreObj = calculateTotalScoreWithEssay(
+        result,
         correctAnswers,
         numMultipleChoice,
         numTrueFalse,
@@ -2241,6 +2369,7 @@ const App: React.FC = () => {
         numFreeResponse,
         scoreConfig
       );
+
       const autoGradedMaxScore = calculateMaxScore(
         numMultipleChoice,
         numTrueFalse,
@@ -2248,6 +2377,8 @@ const App: React.FC = () => {
         numFreeResponse,
         scoreConfig
       );
+
+      const hasEssayGrading = !!(result.essayGrading && Object.keys(result.essayGrading).length > 0) || result.essayTotalScore !== undefined;
 
       const sanitizedName = result.name
         .replace(/[^a-z0-9]/gi, "_")
@@ -2292,8 +2423,14 @@ const App: React.FC = () => {
             let resultClass = "unanswered";
 
             if (prefix === "fr") {
-              resultText = "(GV chấm)";
-              resultClass = "manual-grade";
+              const essayItem = result.essayGrading?.[key];
+              if (essayItem) {
+                resultText = `${essayItem.score}/${essayItem.maxScore} đ ${essayItem.feedback ? `(${essayItem.feedback})` : ''}`;
+                resultClass = essayItem.score > 0 ? "correct" : "incorrect";
+              } else {
+                resultText = "(Chưa chấm)";
+                resultClass = "manual-grade";
+              }
             } else if (correctAnswer !== undefined) {
               if (studentAnswer) {
                 let isRight = false;
@@ -2325,7 +2462,7 @@ const App: React.FC = () => {
                     <tr>
                         <td>${questionLabel}</td>
                         <td>${escapeHtml(studentAnswer)}</td>
-                        <td>${escapeHtml(correctAnswer ?? "")}</td>
+                        <td>${escapeHtml(correctAnswer ?? (prefix === "fr" ? "Theo barem" : ""))}</td>
                         <td class="${resultClass}">${escapeHtml(resultText)}</td>
                     </tr>
                 `;
@@ -2354,28 +2491,54 @@ const App: React.FC = () => {
         processQuestionsForPdf("fr", numFreeResponse);
       }
 
+      // Generate HTML for essay feedback section if available
+      let essayFeedbackSectionHtml = "";
+      if (numFreeResponse > 0) {
+        const essayItemsHtml = Array.from({ length: numFreeResponse }, (_, i) => `fr-${i + 1}`)
+          .map((key, idx) => {
+            const item = result.essayGrading?.[key];
+            const answer = result.answers[key] || "(Học sinh để trống)";
+            return `
+              <div style="margin-bottom: 12px; padding: 10px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+                <p style="margin: 0 0 6px 0;"><strong>Câu ${idx + 1} (${key}):</strong> Điểm: <strong style="color: #7c3aed; font-size: 13px;">${item ? `${item.score}/${item.maxScore} điểm` : 'Chưa chấm điểm'}</strong></p>
+                <p style="margin: 4px 0 6px 0; background-color: #ffffff; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e1; font-size: 11px;"><strong>Bài làm:</strong> ${escapeHtml(answer)}</p>
+                ${item?.feedback ? `<p style="margin: 0; color: #4338ca; font-size: 11px;"><strong>Nhận xét:</strong> ${escapeHtml(item.feedback)}</p>` : ''}
+              </div>
+            `;
+          })
+          .join("");
+
+        essayFeedbackSectionHtml = `
+          <h2 style="margin-top: 25px;">Nhận xét chi tiết phần Tự luận</h2>
+          <div style="margin-bottom: 20px;">
+            ${essayItemsHtml}
+          </div>
+        `;
+      }
+
       const htmlContent = `
     <html>
       <head>
         <meta charset="UTF-8">
         <style>
-          body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 12px; color: #333; }
+          body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 12px; color: #333; line-height: 1.4; }
           .container { padding: 20px; }
-          h1 { font-size: 24px; color: #2c3e50; text-align: center; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
-          h2 { font-size: 18px; color: #34495e; margin-top: 30px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
-          .info { margin-bottom: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #e9ecef; }
-          .info p { margin: 5px 0; }
-          .info strong { display: inline-block; width: 120px; color: #495057; }
-          .summary { margin-bottom: 20px; background-color: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #e9ecef; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #dee2e6; padding: 10px; text-align: left; }
+          h1 { font-size: 22px; color: #2c3e50; text-align: center; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 15px; }
+          h2 { font-size: 16px; color: #34495e; margin-top: 20px; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+          .info { margin-bottom: 15px; background-color: #f8f9fa; padding: 12px; border-radius: 5px; border: 1px solid #e9ecef; }
+          .info p { margin: 4px 0; }
+          .info strong { display: inline-block; width: 140px; color: #495057; }
+          .summary { margin-bottom: 15px; background-color: #eff6ff; padding: 12px; border-radius: 5px; border: 1px solid #bfdbfe; }
+          .summary p { margin: 4px 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+          th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 11px; }
           th { background-color: #e9ecef; font-weight: bold; }
           tr:nth-child(even) { background-color: #f8f9fa; }
           .section-header { background-color: #d1e7dd !important; font-weight: bold; text-align: center; }
           .correct { color: #198754; font-weight: bold; }
           .incorrect { color: #dc3545; font-weight: bold; }
           .unanswered { color: #6c757d; }
-          .manual-grade { color: #6f42c1; }
+          .manual-grade { color: #6f42c1; font-weight: bold; }
         </style>
       </head>
       <body>
@@ -2391,18 +2554,25 @@ const App: React.FC = () => {
                 <p><strong>Thời gian nộp:</strong> ${submissionTimeFormatted}</p>
             </div>
             <div class="summary">
-                <h2>Kết quả</h2>
-                <p><strong>Điểm chấm tự động:</strong> ${score.toFixed(2)} / ${autoGradedMaxScore.toFixed(1)}</p>
-                ${numFreeResponse > 0 ? `<p><strong>Ghi chú:</strong> Điểm trên chưa bao gồm điểm phần tự luận.</p>` : ""}
+                <h2>Kết quả tổng hợp</h2>
+                ${numFreeResponse > 0 ? `
+                  <p><strong>Điểm trắc nghiệm (tự động):</strong> ${scoreObj.autoScore.toFixed(2)} / ${autoGradedMaxScore.toFixed(1)}</p>
+                  <p><strong>Điểm tự luận:</strong> ${hasEssayGrading ? `${scoreObj.essayScore.toFixed(2)} điểm` : '<span style="color: #d97706;">Chưa chấm</span>'}</p>
+                  <p style="font-size: 15px; color: #1e40af; margin-top: 6px;"><strong>TỔNG ĐIỂM TOÀN BÀI:</strong> <strong style="font-size: 17px;">${scoreObj.totalScore.toFixed(2)}</strong> / ${scoreObj.maxScore.toFixed(1)}</p>
+                  ${!hasEssayGrading ? '<p style="color: #b45309; font-size: 11px;"><em>* Lưu ý: Điểm trên chưa bao gồm điểm tự luận do đang chờ giáo viên/AI chấm.</em></p>' : ''}
+                ` : `
+                  <p style="font-size: 15px; color: #1e40af;"><strong>Điểm bài thi:</strong> <strong style="font-size: 17px;">${scoreObj.autoScore.toFixed(2)}</strong> / ${autoGradedMaxScore.toFixed(1)}</p>
+                `}
             </div>
-            <h2>Chi tiết câu trả lời</h2>
+            ${essayFeedbackSectionHtml}
+            <h2>Chi tiết từng câu hỏi</h2>
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 20%;">Câu hỏi</th>
-                        <th style="width: 30%;">Câu trả lời của HS</th>
-                        <th style="width: 30%;">Đáp án đúng</th>
-                        <th style="width: 20%;">Kết quả</th>
+                        <th style="width: 15%;">Câu hỏi</th>
+                        <th style="width: 35%;">Câu trả lời của HS</th>
+                        <th style="width: 25%;">Đáp án chuẩn</th>
+                        <th style="width: 25%;">Kết quả / Điểm</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2435,6 +2605,8 @@ const App: React.FC = () => {
       numTrueFalse,
       numShortAnswer,
       numFreeResponse,
+      scoreConfig,
+      testName,
     ],
   );
 
@@ -2871,6 +3043,7 @@ const App: React.FC = () => {
           onDeleteActiveParticipant={handleDeleteActiveParticipant}
           onEditStudentId={handleEditStudentId}
           onReviewStudent={handleReviewStudent}
+          onUpdateResults={handleUpdateAllStudentResults}
           activeParticipants={activeParticipants}
           teacherPassword={teacherPassword}
           testName={testName}

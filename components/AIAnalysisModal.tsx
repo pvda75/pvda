@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { GoogleGenAI } from '@google/genai';
 import Markdown from 'react-markdown';
 import { StudentResult, ScoreConfig, TestVersion } from '../types';
 import { X } from 'lucide-react';
@@ -27,41 +26,33 @@ const AIAnalysisModal: React.FC<AIAnalysisModalProps> = ({ isOpen, onClose, resu
     setIsAnalyzing(true);
     setError('');
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error('Không tìm thấy API Key của Gemini. Vui lòng cấu hình GEMINI_API_KEY.');
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-
-      // Prepare data for AI
       const totalStudents = results.length;
-      const scores = results.map(r => r.score);
+      const scores = results.map(r => r.score || 0);
       const avgScore = scores.reduce((a, b) => a + b, 0) / totalStudents;
       const maxScore = Math.max(...scores);
       const minScore = Math.min(...scores);
 
-      const prompt = `
-Bạn là một chuyên gia giáo dục và phân tích dữ liệu. Hãy phân tích kết quả bài kiểm tra của học sinh dựa trên dữ liệu sau:
-- Tổng số học sinh tham gia: ${totalStudents}
-- Điểm trung bình: ${avgScore.toFixed(2)}
-- Điểm cao nhất: ${maxScore.toFixed(2)}
-- Điểm thấp nhất: ${minScore.toFixed(2)}
-- Danh sách điểm cụ thể: ${scores.join(', ')}
-
-Yêu cầu:
-1. Đánh giá tổng quan về phổ điểm và tình hình làm bài của lớp.
-2. Chỉ ra các điểm nổi bật (nếu có).
-3. Đưa ra lời khuyên cho giáo viên để cải thiện kết quả học tập của học sinh trong các bài kiểm tra tới.
-Trình bày bằng tiếng Việt, định dạng Markdown rõ ràng, dễ đọc.
-      `;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
+      const response = await fetch('/api/gemini/analyze-results', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          totalStudents,
+          avgScore,
+          maxScore,
+          minScore,
+          scores,
+        }),
       });
 
-      setAnalysis(response.text || 'Không có phản hồi từ AI.');
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Lỗi máy chủ (${response.status})`);
+      }
+
+      const data = await response.json();
+      setAnalysis(data.analysis || 'Không có phản hồi từ AI.');
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Đã xảy ra lỗi khi phân tích dữ liệu.');

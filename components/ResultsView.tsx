@@ -3,8 +3,10 @@ import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Answers, StudentResult, TestVersion, ScoreConfig } from '../types';
-import { calculateScore, calculateMaxScore, normalizeAnswer, normalizeQuestionKey } from '../utils';
+import { calculateScore, calculateMaxScore, calculateTotalScoreWithEssay, normalizeAnswer, normalizeQuestionKey } from '../utils';
 import AIAnalysisModal from './AIAnalysisModal';
+import AIEssayGradingModal from './AIEssayGradingModal';
+import { Sparkles } from 'lucide-react';
 
 interface AllResultsViewProps {
   results: StudentResult[];
@@ -24,6 +26,7 @@ interface AllResultsViewProps {
   onDeleteActiveParticipant?: (participantId: string) => void;
   onEditStudentId?: (oldId: string, newId: string) => void;
   onReviewStudent?: (result: StudentResult) => void;
+  onUpdateResults?: (updatedResults: StudentResult[]) => Promise<void>;
   activeParticipants?: { id?: string; name: string; class: string; studentId: string; testVersionId: string; joinTime: string }[];
   teacherPassword?: string;
   testName?: string;
@@ -48,6 +51,7 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
     onDeleteActiveParticipant,
     onEditStudentId,
     onReviewStudent,
+    onUpdateResults,
     activeParticipants = [],
     teacherPassword,
     testName,
@@ -55,6 +59,8 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
 }) => {
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isAiEssayGradingOpen, setIsAiEssayGradingOpen] = useState(false);
+  const [singleStudentForAi, setSingleStudentForAi] = useState<StudentResult | null>(null);
   const [studentToDelete, setStudentToDelete] = useState<StudentResult | null>(null);
   const [participantToDelete, setParticipantToDelete] = useState<{ id?: string; name: string } | null>(null);
   const [selectedResultIds, setSelectedResultIds] = useState<string[]>([]);
@@ -197,7 +203,16 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
     results.forEach(result => {
       const correctAnswers = testVersions.get(result.testVersionId)?.correctAnswers;
       if (correctAnswers) {
-        const score = calculateScore(result.answers, correctAnswers, numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
+        const scoreObj = calculateTotalScoreWithEssay(
+          result,
+          correctAnswers,
+          numMultipleChoice,
+          numTrueFalse,
+          numShortAnswer,
+          numFreeResponse,
+          scoreConfig
+        );
+        const score = scoreObj.totalScore;
         totalScore += score;
         if (score > maxScore) maxScore = score;
         if (score < minScore) minScore = score;
@@ -663,7 +678,11 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
                             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Lớp</th>
                             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Mã đề</th>
                             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Thời gian nộp</th>
-                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Điểm chấm tự động</th>
+                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Trắc nghiệm</th>
+                            {numFreeResponse > 0 && (
+                              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-purple-700 uppercase tracking-wider">Tự luận (AI)</th>
+                            )}
+                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Tổng điểm</th>
                             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Vi phạm</th>
                             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-blue-600 uppercase tracking-wider">Ghi chú</th>
                             <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-blue-600 uppercase tracking-wider">Hành động</th>
@@ -672,13 +691,14 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
                     <tbody className="bg-white divide-y divide-gray-200">
                         {results.length === 0 ? (
                             <tr>
-                                <td colSpan={11} className="text-center py-10 text-gray-500">Chưa có học sinh nào nộp bài.</td>
+                                <td colSpan={numFreeResponse > 0 ? 12 : 11} className="text-center py-10 text-gray-500">Chưa có học sinh nào nộp bài.</td>
                             </tr>
                         ) : results.map((result, index) => {
                             const correctAnswers = testVersions.get(result.testVersionId)?.correctAnswers;
                             if (!correctAnswers) return null; // Should not happen
                             
-                            const score = calculateScore(result.answers, correctAnswers, numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
+                            const scoreData = calculateTotalScoreWithEssay(result, correctAnswers, numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
+                            const hasEssayGrading = result.essayGrading && Object.keys(result.essayGrading).length > 0;
                             const submissionTime = result.submissionTime 
                                 ? new Date(result.submissionTime).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
                                 : 'N/A';
@@ -688,7 +708,8 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
                             if (result.submissionType === 'auto_violation') note = 'Tự nộp (Vi phạm)';
                             else if (result.submissionType === 'auto_visibility') note = 'Tự nộp (Thoát màn hình)';
                             else if (result.submissionType === 'auto_timeout') note = 'Tự nộp (Hết giờ)';
-                            else if (numFreeResponse > 0) note = 'Chưa tính điểm tự luận';
+                            else if (numFreeResponse > 0 && !hasEssayGrading) note = 'Chờ chấm tự luận';
+                            else if (numFreeResponse > 0 && hasEssayGrading) note = 'Đã chấm tự luận (AI)';
 
                             return (
                                 <tr key={index} className={isSelected ? 'bg-blue-50' : ''}>
@@ -744,33 +765,71 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
                                         </div>
                                       )}
                                     </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{result.name}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-semibold">{result.name}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{result.class}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{result.testVersionId}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{submissionTime}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-semibold">{score.toFixed(2)} / {autoGradedMaxScore.toFixed(1)}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-medium">{scoreData.autoScore.toFixed(2)}</td>
+                                    {numFreeResponse > 0 && (
+                                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                        {hasEssayGrading ? (
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                            <Sparkles className="w-3 h-3 text-purple-600" />
+                                            {scoreData.essayScore.toFixed(2)} đ
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs text-gray-500 bg-gray-100">
+                                            Chưa chấm
+                                          </span>
+                                        )}
+                                      </td>
+                                    )}
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-blue-700">
+                                      {scoreData.totalScore.toFixed(2)} / {scoreData.maxScore.toFixed(1)}
+                                    </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{result.violationCount || 0}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{note}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                      {hasEssayGrading ? (
+                                        <span className="text-purple-700 font-medium text-xs flex items-center gap-1">
+                                          <Sparkles className="w-3 h-3" /> {note}
+                                        </span>
+                                      ) : (
+                                        note
+                                      )}
+                                    </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
                                       <div className="flex justify-center items-center gap-2">
+                                        {numFreeResponse > 0 && (
+                                          <button
+                                            onClick={() => {
+                                              setSingleStudentForAi(result);
+                                              setIsAiEssayGradingOpen(true);
+                                            }}
+                                            className="text-purple-600 hover:text-purple-900 font-medium px-2 py-1 rounded-md hover:bg-purple-50 transition-colors flex items-center gap-1 text-xs cursor-pointer border border-purple-200"
+                                            title="Chấm riêng bài tự luận của học sinh này"
+                                          >
+                                            <Sparkles className="w-3.5 h-3.5" />
+                                            <span>Chấm AI</span>
+                                          </button>
+                                        )}
                                         {onReviewStudent && (
                                           <button
                                               onClick={() => handleReviewClick(result)}
-                                              className="text-yellow-600 hover:text-yellow-900 font-medium px-3 py-1 rounded-md hover:bg-yellow-50 transition-colors"
+                                              className="text-yellow-600 hover:text-yellow-900 font-medium px-3 py-1 rounded-md hover:bg-yellow-50 transition-colors cursor-pointer"
                                           >
                                               Xem lại
                                           </button>
                                         )}
                                         <button
                                             onClick={() => onExportStudent(result)}
-                                            className="text-blue-600 hover:text-blue-900 font-medium px-3 py-1 rounded-md hover:bg-blue-50 transition-colors"
+                                            className="text-blue-600 hover:text-blue-900 font-medium px-3 py-1 rounded-md hover:bg-blue-50 transition-colors cursor-pointer"
                                         >
                                             Xuất PDF
                                         </button>
                                         {isAdmin && onDeleteStudentResult && (
                                             <button
                                                 onClick={() => setStudentToDelete(result)}
-                                                className="text-red-600 hover:text-red-900 font-medium px-3 py-1 rounded-md hover:bg-red-50 transition-colors"
+                                                className="text-red-600 hover:text-red-900 font-medium px-3 py-1 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
                                             >
                                                 Xóa
                                             </button>
@@ -785,10 +844,20 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
             </div>
 
             <div className="flex flex-col sm:flex-row flex-wrap justify-center items-center gap-4 pt-4">
-                 <button onClick={onExport} className="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">Xuất kết quả tổng hợp</button>
-                 <button onClick={() => setIsStatsModalOpen(true)} className="w-full sm:w-auto px-6 py-3 bg-orange-500 text-white font-semibold rounded-lg shadow-md hover:bg-orange-600">Thống kê kết quả</button>
-                 <button onClick={() => setIsAiModalOpen(true)} className="w-full sm:w-auto px-6 py-3 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700">Phân tích AI</button>
-                 <button onClick={onContinueSession} className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700">Đóng</button>
+                 <button onClick={onExport} className="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 cursor-pointer">Xuất kết quả tổng hợp</button>
+                 <button onClick={() => setIsStatsModalOpen(true)} className="w-full sm:w-auto px-6 py-3 bg-orange-500 text-white font-semibold rounded-lg shadow-md hover:bg-orange-600 cursor-pointer">Thống kê kết quả</button>
+                 <button 
+                   onClick={() => {
+                     setSingleStudentForAi(null);
+                     setIsAiEssayGradingOpen(true);
+                   }} 
+                   className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold rounded-lg shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all"
+                 >
+                   <Sparkles className="w-5 h-5 text-yellow-300 animate-pulse" />
+                   <span>Chấm tự luận bằng AI</span>
+                 </button>
+                 <button onClick={() => setIsAiModalOpen(true)} className="w-full sm:w-auto px-6 py-3 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 cursor-pointer">Phân tích AI</button>
+                 <button onClick={onContinueSession} className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 cursor-pointer">Đóng</button>
             </div>
             <AIAnalysisModal
               isOpen={isAiModalOpen}
@@ -796,6 +865,24 @@ const AllResultsView: React.FC<AllResultsViewProps> = ({
               results={results}
               testVersions={testVersions}
               scoreConfig={scoreConfig}
+            />
+            <AIEssayGradingModal
+              isOpen={isAiEssayGradingOpen}
+              onClose={() => {
+                setIsAiEssayGradingOpen(false);
+                setSingleStudentForAi(null);
+              }}
+              results={results}
+              numFreeResponse={numFreeResponse}
+              numShortAnswer={numShortAnswer}
+              scoreConfig={scoreConfig}
+              testVersions={testVersions as any}
+              singleStudent={singleStudentForAi}
+              onSaveGrading={async (updated) => {
+                if (onUpdateResults) {
+                  await onUpdateResults(updated);
+                }
+              }}
             />
         </div>
     </div>

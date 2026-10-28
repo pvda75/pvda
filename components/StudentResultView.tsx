@@ -4,7 +4,7 @@ import { StudentResult, Answers, ScoreConfig } from '../types';
 import PdfViewer from './PdfViewer';
 import MarkdownViewer from './MarkdownViewer';
 import AnswerSheet from './AnswerSheet';
-import { calculateScore, calculateMaxScore } from '../utils';
+import { calculateScore, calculateMaxScore, calculateTotalScoreWithEssay } from '../utils';
 
 interface StudentResultViewProps {
     result: StudentResult;
@@ -33,8 +33,7 @@ const StudentResultView: React.FC<StudentResultViewProps> = ({
     onBack,
     testName
 }) => {
-    const score = calculateScore(result.answers, correctAnswers, numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
-    const autoGradedMaxScore = calculateMaxScore(numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
+    const scoreData = calculateTotalScoreWithEssay(result, correctAnswers, numMultipleChoice, numTrueFalse, numShortAnswer, numFreeResponse, scoreConfig);
     const [activeMobileTab, setActiveMobileTab] = useState<'pdf' | 'answers'>('pdf');
 
     return (
@@ -57,12 +56,22 @@ const StudentResultView: React.FC<StudentResultViewProps> = ({
                                 ))}
                             </p>
                         )}
-                        <p className="font-bold text-blue-600 mt-1">
-                            Điểm chấm tự động: {score.toFixed(2)} / {autoGradedMaxScore.toFixed(1)}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-3 mt-1.5">
+                            <span className="font-medium text-gray-700 bg-gray-200/80 px-2 py-0.5 rounded text-xs">
+                                Điểm Trắc nghiệm: <strong className="text-blue-700">{scoreData.autoScore.toFixed(2)}</strong>
+                            </span>
+                            {numFreeResponse > 0 && (
+                                <span className="font-medium text-purple-800 bg-purple-100 px-2 py-0.5 rounded text-xs border border-purple-200">
+                                    Điểm Tự luận (AI): <strong className="text-purple-700">{scoreData.essayScore.toFixed(2)}</strong>
+                                </span>
+                            )}
+                            <span className="font-bold text-white bg-blue-600 px-3 py-0.5 rounded text-xs shadow-sm">
+                                Tổng điểm: {scoreData.totalScore.toFixed(2)} / {scoreData.maxScore.toFixed(1)}
+                            </span>
+                        </div>
                     </div>
                 </div>
-                <button onClick={onBack} className="px-4 py-2 md:px-6 md:py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 text-sm md:text-base self-end md:self-auto print:hidden">Quay lại</button>
+                <button onClick={onBack} className="px-4 py-2 md:px-6 md:py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 text-sm md:text-base self-end md:self-auto print:hidden cursor-pointer">Quay lại</button>
             </header>
             <main className="flex-grow flex flex-col lg:flex-row gap-4 overflow-hidden print:overflow-visible print:block print:h-auto" style={{minHeight: 0}}>
                 {/* Mobile Tabs */}
@@ -104,6 +113,7 @@ const StudentResultView: React.FC<StudentResultViewProps> = ({
                         answers={result.answers}
                         correctAnswers={correctAnswers}
                         isReview={true}
+                        essayGrading={result.essayGrading}
                     />
                 </div>
             </main>

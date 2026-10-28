@@ -7,6 +7,8 @@ interface PdfViewerProps {
 
 const PdfViewer: React.FC<PdfViewerProps> = ({ file }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderTaskRef = useRef<any>(null);
+  const renderIdRef = useRef<number>(0);
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [pageNum, setPageNum] = useState<number>(1);
   const [numPages, setNumPages] = useState<number>(0);
@@ -18,41 +20,77 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file }) => {
     async (num: number, currentScale: number) => {
       if (!pdfDoc) return;
 
+      const currentId = ++renderIdRef.current;
+
+      // 1. Cancel previous render task if still active, and wait for it to release the canvas
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+          await renderTaskRef.current.promise;
+        } catch {
+          // Expected cancellation exception
+        }
+        renderTaskRef.current = null;
+      }
+
+      // If another render was triggered while waiting for cancellation, abort this one
+      if (currentId !== renderIdRef.current) {
+        return;
+      }
+
       setIsLoading(true);
+      setError(null);
+
       try {
         const page = await pdfDoc.getPage(num);
+        if (currentId !== renderIdRef.current) return;
+
         const viewport = page.getViewport({ scale: currentScale });
         const canvas = canvasRef.current;
-        if (canvas) {
-          const context = canvas.getContext("2d");
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
+        if (!canvas) return;
 
-          if (context) {
-            const renderContext = {
-              canvasContext: context,
-              viewport: viewport,
-            };
-            await page.render(renderContext).promise;
-          }
+        const context = canvas.getContext("2d");
+        if (!context) return;
+
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        const renderContext = {
+          canvasContext: context,
+          viewport: viewport,
+        };
+
+        const task = page.render(renderContext);
+        renderTaskRef.current = task;
+
+        await task.promise;
+      } catch (err: any) {
+        if (err?.name === "RenderingCancelledException") {
+          // Normal cancellation when switching page/scale, do not show error
+          return;
         }
-      } catch (err) {
-        setError("Không thể hiển thị trang.");
-        console.error(err);
+        if (currentId === renderIdRef.current) {
+          setError("Không thể hiển thị trang.");
+          console.error("PDF render error:", err);
+        }
       } finally {
-        setIsLoading(false);
+        if (currentId === renderIdRef.current) {
+          setIsLoading(false);
+          renderTaskRef.current = null;
+        }
       }
     },
     [pdfDoc],
   );
 
   useEffect(() => {
+    let isMounted = true;
     const loadPdf = async () => {
       try {
         const fileReader = new FileReader();
         fileReader.onload = async function () {
           try {
-            if (this.result) {
+            if (this.result && isMounted) {
               const typedarray = new Uint8Array(this.result as ArrayBuffer);
 
               // Wait for pdfjsLib to load
@@ -62,6 +100,8 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file }) => {
                 retries++;
               }
 
+              if (!isMounted) return;
+
               if (!(window as any).pdfjsLib) {
                 setError("Thư viện PDF chưa được tải. Vui lòng tải lại trang.");
                 setIsLoading(false);
@@ -70,34 +110,60 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ file }) => {
 
               const pdf = await (window as any).pdfjsLib.getDocument({ data: typedarray })
                 .promise;
-              setPdfDoc(pdf);
-              setNumPages(pdf.numPages);
-              setPageNum(1);
+              if (isMounted) {
+                setPdfDoc(pdf);
+                setNumPages(pdf.numPages);
+                setPageNum(1);
+              }
             }
           } catch (err) {
-            setError("Không thể tải file PDF. File có thể bị lỗi.");
-            console.error("Error loading PDF document:", err);
-            setIsLoading(false);
+            if (isMounted) {
+              setError("Không thể tải file PDF. File có thể bị lỗi.");
+              console.error("Error loading PDF document:", err);
+              setIsLoading(false);
+            }
           }
         };
         fileReader.onerror = () => {
-          setError("Lỗi khi đọc file PDF.");
-          setIsLoading(false);
+          if (isMounted) {
+            setError("Lỗi khi đọc file PDF.");
+            setIsLoading(false);
+          }
         };
         fileReader.readAsArrayBuffer(file);
       } catch (err) {
-        setError("Không thể tải file PDF.");
-        console.error(err);
-        setIsLoading(false);
+        if (isMounted) {
+          setError("Không thể tải file PDF.");
+          console.error(err);
+          setIsLoading(false);
+        }
       }
     };
     loadPdf();
+
+    return () => {
+      isMounted = false;
+      renderIdRef.current++;
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch {}
+        renderTaskRef.current = null;
+      }
+    };
   }, [file]);
 
   useEffect(() => {
     if (pdfDoc) {
       renderPage(pageNum, scale);
     }
+    return () => {
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch {}
+      }
+    };
   }, [pdfDoc, pageNum, scale, renderPage]);
 
   const onPrevPage = () => {
